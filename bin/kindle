@@ -1,0 +1,84 @@
+#!/bin/sh -e
+##:
+#h: Usage: kindle [-Vwm] PDFs...
+#h:
+#h: Send books to my kindle.
+#h:
+#h:   -V : Show configuration.
+#h:   -w : Open amazon kindle library.
+#h:   -m : Open amazon my kindle site.
+#h:   -c : Crop pdf before sending.
+##:
+kindle() {
+    local OPTIND optopt arg subject tmp opt_c=
+
+    ## Parse command line arguments.
+    while getopts "Vwmc" optopt; do
+        case $optopt in
+            V)  kindle_show_variables; return 0;;
+            w)  xdg-open "https://read.amazon.com/kindle-library"; return 0;;
+            m)  xdg-open "https://www.amazon.es/myk"; return 0;;
+            c)  opt_c="y";;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    kindle_check_variables
+    
+    ## Send PDFs.
+    for arg in "$@"; do
+        subject="$(basename "${arg}")" 
+        if test -n "${opt_c}"; then
+            attachment="$(echo "${arg}" | sed 's|\.pdf||')-crop.pdf"
+            if test ! -e "${attachment}"; then
+                echo >&2 "Creating ${attachment} ..."
+                pdfcrop --margins "${KINDLE_MARGINS}" "${arg}" "${attachment}.tmp"
+                mv "${attachment}.tmp" "${attachment}"
+            fi
+        else
+            attachment="${arg}"
+        fi
+        
+        echo "Sending '${attachment}' to '${KINDLE_MAIL}' with '${KINDLE_ACCOUNT}' ..."
+        tmp="$(mktemp -u)"
+        
+        mpack -s "${subject}" -a -o "${tmp}" "${attachment}"
+        sed -i "
+        1iFrom: ${KINDLE_ACCOUNT}
+        1iTo: ${KINDLE_MAIL}
+        /^Message-ID:/d
+        /^MIME-Version:/d
+        " "${tmp}"
+        msmtp -a "${KINDLE_ACCOUNT}" "${KINDLE_MAIL}" < "${tmp}"
+        rm -f "${tmp}"
+    done
+    if test -n "${1}"; then
+        echo >&2 "warning: Maybe you need to logon to ${KINDLE_ACCOUNT} and confirm the send."
+    fi
+    
+}
+kindle_show_variables() {
+    cat <<-EOF
+	KINDLE_MAIL    : ${KINDLE_MAIL}
+	KINDLE_ACCOUNT : ${KINDLE_ACCOUNT}
+	KINDLE_MARGINS : ${KINDLE_MARGINS}
+	EOF
+}
+kindle_check_variables() {
+    if test ! -n "${KINDLE_MAIL}"; then
+        echo >&2 "error: Please set KINDLE_MAIL environment variable."
+        return 1
+    fi
+    if ! which mpack msmtp >/dev/null 2>&1; then
+        echo >&2 "error: Please install mpack and msmtp."
+        return 1
+    fi
+}
+## -------------------------------------------------------------------
+KINDLE_MARGINS="${KINDLE_MARGINS:-10 10 10 10}"
+if test @"$(basename "$0")" = @"kindle";then
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0" ;;
+        *)            kindle "$@"; exit 0;;
+    esac
+fi
